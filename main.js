@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🏆 LINUX DO OAuth 极简助手 - 面板集成版
 // @namespace    https://github.com/TechnologyStar/linuxdo-oauth-helper
-// @version      3.0.1
+// @version      3.0.2
 // @description  🎯 专为LINUX DO OAuth设计的三主题UI助手 - 简约白/紫色渐变/彩虹华丽 + 条形图统计
 // @author       Premium UI Designer
 // @match        https://connect.linux.do/*
@@ -14,6 +14,8 @@
 // @grant        GM_download
 // @license      MIT
 // @icon         data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIyMCIgZmlsbD0iI0ZGRkZGRiIgc3Ryb2tlPSIjRTVFN0VCIiBzdHJva2Utd2lkdGg9IjIiLz48dGV4dCB4PSIzMiIgeT0iNDAiIGZvbnQtZmFtaWx5PSJzeXN0ZW0tdWkiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiM2QjdCODAiIHRleHQtYW5jaG9yPSJtaWRkbGUiPvCfkpA8L3RleHQ+PC9zdmc+
+// @downloadURL https://update.greasyfork.org/scripts/544675/%F0%9F%8F%86%20LINUX%20DO%20OAuth%20%E6%9E%81%E7%AE%80%E5%8A%A9%E6%89%8B%20-%20%E9%9D%A2%E6%9D%BF%E9%9B%86%E6%88%90%E7%89%88.user.js
+// @updateURL https://update.greasyfork.org/scripts/544675/%F0%9F%8F%86%20LINUX%20DO%20OAuth%20%E6%9E%81%E7%AE%80%E5%8A%A9%E6%89%8B%20-%20%E9%9D%A2%E6%9D%BF%E9%9B%86%E6%88%90%E7%89%88.meta.js
 // ==/UserScript==
 
 (function() {
@@ -28,6 +30,12 @@
             autoClickApprove: false,
             saveLoginHistory: false,
             showNotifications: false,
+            // 网站限制
+            restrictByWebsite: true,  // ✅ 默认开启限制：只对白名单网站自动授权
+            useRemoteWhitelist: true, // ✅ 默认启用远程白名单
+            remoteWhitelistUrl: 'https://raw.githubusercontent.com/TechnologyStar/linuxdo-oauth-helper/refs/heads/main/whitelist.json',
+            remoteWhitelistTtlMs: 6 * 60 * 60 * 1000, // 远程名单缓存时长：6小时
+            whitelist: [],            // 本地额外白名单（可选，手动补充）
 
             // UI设置
             autoHidePanel: false,
@@ -147,6 +155,86 @@
             const sizes = ['Bytes', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        // ✅ 规范化：输入 URL 或 文本 → 纯域名（不带协议、不带路径、不带末尾/）
+        static normalizeHost(input = '') {
+            if (!input) return '';
+            let s = String(input).trim();
+            // 先去协议、末尾斜杠、路径
+            s = s.replace(/^https?:\/\//i, '').replace(/\/+$/g, '');
+            s = s.split('/')[0];
+            return s.toLowerCase();
+        }
+
+        // ✅ 远程抓取文本（优先 GM_xmlhttpRequest，失败再用 fetch）
+        static fetchText(url) {
+            return new Promise((resolve, reject) => {
+                if (typeof GM_xmlhttpRequest === 'function') {
+                    GM_xmlhttpRequest({
+                        method: 'GET',
+                        url,
+                        headers: { 'Cache-Control': 'no-cache' },
+                        timeout: 15000,
+                        onload: r => resolve(r.responseText),
+                        onerror: e => reject(e && e.error || 'GM_xmlhttpRequest error'),
+                        ontimeout: () => reject('GM_xmlhttpRequest timeout')
+                    });
+                } else {
+                    fetch(url, { cache: 'no-store' })
+                        .then(res => res.text())
+                        .then(resolve)
+                        .catch(err => reject(err?.message || 'fetch error'));
+                }
+            });
+        }
+
+        // ✅ 加载或刷新远程白名单（按行解析，忽略空行和 # 注释）
+        // 结果会缓存到 Storage 的 remoteWhitelist / remoteWhitelistUpdatedAt
+        static async loadRemoteWhitelist(storage, settings) {
+            if (!settings.useRemoteWhitelist) return storage.get('remoteWhitelist', []);
+            const ttl = Number(settings.remoteWhitelistTtlMs || (6 * 60 * 60 * 1000)); // 默认6小时
+            const last = Number(storage.get('remoteWhitelistUpdatedAt', 0));
+            const now = Date.now();
+
+            // 缓存有效则直接返回
+            const cached = storage.get('remoteWhitelist', []);
+            if (Array.isArray(cached) && cached.length > 0 && (now - last) < ttl) {
+                return cached;
+            }
+
+            try {
+                const txt = await Utils.fetchText(settings.remoteWhitelistUrl);
+                const hosts = (txt || '')
+                .split(/\r?\n/)
+                .map(l => l.trim())
+                .filter(l => l && !l.startsWith('#'))
+                .map(Utils.normalizeHost);
+
+                const uniq = Array.from(new Set(hosts));
+                storage.set('remoteWhitelist', uniq);
+                storage.set('remoteWhitelistUpdatedAt', now);
+                Utils.log(`远程白名单已更新，共 ${uniq.length} 条`);
+                return uniq;
+            } catch (e) {
+                Utils.log('远程白名单拉取失败：' + e, 'error');
+                // 失败则使用旧缓存
+                return storage.get('remoteWhitelist', []);
+            }
+        }
+
+        // ✅ 判断 host 是否在 {远程 | 本地} 白名单（支持 *.example.com）
+        static isHostAllowed(host, lists = []) {
+            if (!host) return false;
+            const h = host.toLowerCase();
+            const rules = new Set(
+                lists.flat()
+                .filter(Boolean)
+                .map(Utils.normalizeHost)
+            );
+            for (const rule of rules) {
+                if (h === rule || h.endsWith('.' + rule)) return true;
+            }
+            return false;
         }
 
         static exportToJSON(data, filename) {
@@ -306,7 +394,8 @@
         }
 
         initStorage() {
-            const keys = ['settings', 'stats', 'history', 'metadata'];
+            const keys = ['settings', 'stats', 'history', 'metadata', 'remoteWhitelist', 'remoteWhitelistUpdatedAt'];
+
             keys.forEach(key => {
                 if (this.get(key) === null) {
                     this.set(key, this.getDefaultValue(key));
@@ -332,7 +421,10 @@
                     version: CONFIG.version,
                     lastBackup: null,
                     migrationVersion: 1
-                }
+                },
+                // ✅ 新增：远程白名单缓存（数组）与上次更新时间（毫秒时间戳）
+                remoteWhitelist: [],
+                remoteWhitelistUpdatedAt: 0
             };
             return defaults[key] || {};
         }
@@ -440,7 +532,7 @@
 
         calculateDataSize() {
             let totalSize = 0;
-            ['settings', 'stats', 'history', 'metadata'].forEach(key => {
+            ['settings', 'stats', 'history', 'metadata', 'remoteWhitelist', 'remoteWhitelistUpdatedAt'].forEach(key => {
                 const data = this.get(key);
                 if (data) {
                     totalSize += JSON.stringify(data).length;
@@ -465,18 +557,21 @@
                 const systemEl = this.findTextElement('系统:');
                 const system = systemEl ? systemEl.textContent.replace('系统:', '').trim() : '未知系统';
 
+                // ✅ 正确从同一 <p> 内部取到 <a>
                 const websiteEl = this.findTextElement('网站:');
                 let website = '未知网站';
                 let websiteUrl = '';
                 if (websiteEl) {
-                    const link = websiteEl.nextElementSibling;
-                    if (link && link.tagName === 'A') {
-                        website = link.textContent.trim();
-                        websiteUrl = link.href;
+                    const link = websiteEl.querySelector('a');
+                    if (link) {
+                        website = (link.textContent || '').trim();
+                        websiteUrl = link.getAttribute('href') || '';
                     } else {
                         website = websiteEl.textContent.replace('网站:', '').trim();
                     }
                 }
+                // ✅ 归一化为纯域名（不带 https:// 且无末尾 /）
+                const websiteHost = Utils.normalizeHost(websiteUrl || website);
 
                 const descEl = this.findTextElement('描述:');
                 const description = descEl ? descEl.textContent.replace('描述:', '').trim() : '无描述';
@@ -504,6 +599,7 @@
                     system: '未知系统',
                     website: '未知网站',
                     websiteUrl: '',
+                    websiteHost,
                     description: '无描述',
                     extractTime: new Date().toISOString(),
                     pageType: this.getPageType(),
@@ -665,14 +761,38 @@
             }, this.settings.autoClickDelay);
         }
 
-        attemptAutoClick() {
+        // ✅ 加拦截：先判断是否在白名单（远程 + 本地），不在就不自动授权
+        async attemptAutoClick() {
             if (this.hasClicked) {
                 Utils.log('已经点击过，跳过');
                 return;
             }
 
-            const approveButton = document.querySelector(CONFIG.selectors.approveButton);
+            // —— 白名单限制（默认开启）——
+            if (this.settings.restrictByWebsite) {
+                const pi = this.pageInfo.get();
+                // 取纯域名：优先用 PageInfo 提取的 websiteHost
+                const host = pi.websiteHost || Utils.normalizeHost(pi.websiteUrl || pi.website);
 
+                // 本地白名单（你面板里手动加的）
+                const localList = Array.isArray(this.settings.whitelist) ? this.settings.whitelist : [];
+
+                // 远程白名单（按 TTL 拉取/复用缓存）
+                const remoteList = await Utils.loadRemoteWhitelist(this.storage, this.settings);
+
+                const allowed = Utils.isHostAllowed(host, [localList, remoteList]);
+
+                if (!allowed) {
+                    Utils.log(`已阻止自动授权：${host || '(未知网站)'} 不在白名单`);
+                    if (this.settings.showNotifications) {
+                        this.showNotification(`❌ 已阻止自动授权：${host || '未知网站'} 不在白名单`);
+                    }
+                    return; // ❗ 不在白名单，直接退出，不再点“允许”
+                }
+            }
+
+            // —— 真正执行自动授权 ——
+            const approveButton = document.querySelector(CONFIG.selectors.approveButton);
             if (!approveButton) {
                 Utils.log('未找到授权按钮', 'error');
                 return;
@@ -1652,49 +1772,74 @@
         generateSettingsHTML() {
             const settings = this.settings;
             return `
-                <div class="oauth-section">
-                    <div class="oauth-section-title">
-                        <span>⚙️</span>
-                        <span>基础设置</span>
-                    </div>
-                    <div class="oauth-switch-item">
-                        <div class="oauth-switch-info">
-                            <div class="oauth-switch-label">自动点击授权</div>
-                            <div class="oauth-switch-desc">自动点击"允许"按钮，无需手动操作</div>
-                        </div>
-                        <div class="oauth-switch ${settings.autoClickApprove ? 'active' : ''}" data-setting="autoClickApprove">
-                            <div class="oauth-switch-knob"></div>
-                        </div>
-                    </div>
-                    <div class="oauth-switch-item">
-                        <div class="oauth-switch-info">
-                            <div class="oauth-switch-label">保存登录记录</div>
-                            <div class="oauth-switch-desc">记录所有授权操作的详细历史</div>
-                        </div>
-                        <div class="oauth-switch ${settings.saveLoginHistory ? 'active' : ''}" data-setting="saveLoginHistory">
-                            <div class="oauth-switch-knob"></div>
-                        </div>
-                    </div>
-                    <div class="oauth-switch-item">
-                        <div class="oauth-switch-info">
-                            <div class="oauth-switch-label">显示通知</div>
-                            <div class="oauth-switch-desc">操作完成后显示提示通知</div>
-                        </div>
-                        <div class="oauth-switch ${settings.showNotifications ? 'active' : ''}" data-setting="showNotifications">
-                            <div class="oauth-switch-knob"></div>
-                        </div>
-                    </div>
-                    <div class="oauth-switch-item">
-                        <div class="oauth-switch-info">
-                            <div class="oauth-switch-label">启用UI优化</div>
-                            <div class="oauth-switch-desc">美化OAuth页面按钮和样式</div>
-                        </div>
-                        <div class="oauth-switch ${settings.enablePageStyling ? 'active' : ''}" data-setting="enablePageStyling">
-                            <div class="oauth-switch-knob"></div>
-                        </div>
-                    </div>
+        <div class="oauth-section">
+            <div class="oauth-section-title">
+                <span>⚙️</span>
+                <span>基础设置</span>
+            </div>
+
+            <!-- 原有：自动点击授权 -->
+            <div class="oauth-switch-item">
+                <div class="oauth-switch-info">
+                    <div class="oauth-switch-label">自动点击授权</div>
+                    <div class="oauth-switch-desc">自动点击"允许"按钮，无需手动操作</div>
                 </div>
-            `;
+                <div class="oauth-switch ${settings.autoClickApprove ? 'active' : ''}" data-setting="autoClickApprove">
+                    <div class="oauth-switch-knob"></div>
+                </div>
+            </div>
+
+            <!-- 原有：保存登录记录 -->
+            <div class="oauth-switch-item">
+                <div class="oauth-switch-info">
+                    <div class="oauth-switch-label">保存登录记录</div>
+                    <div class="oauth-switch-desc">记录所有授权操作的详细历史</div>
+                </div>
+                <div class="oauth-switch ${settings.saveLoginHistory ? 'active' : ''}" data-setting="saveLoginHistory">
+                    <div class="oauth-switch-knob"></div>
+                </div>
+            </div>
+
+            <!-- 原有：显示通知 -->
+            <div class="oauth-switch-item">
+                <div class="oauth-switch-info">
+                    <div class="oauth-switch-label">显示通知</div>
+                    <div class="oauth-switch-desc">操作完成后显示提示通知</div>
+                </div>
+                <div class="oauth-switch ${settings.showNotifications ? 'active' : ''}" data-setting="showNotifications">
+                    <div class="oauth-switch-knob"></div>
+                </div>
+            </div>
+
+            <!-- 原有：启用UI优化 -->
+            <div class="oauth-switch-item">
+                <div class="oauth-switch-info">
+                    <div class="oauth-switch-label">启用UI优化</div>
+                    <div class="oauth-switch-desc">美化OAuth页面按钮和样式</div>
+                </div>
+                <div class="oauth-switch ${settings.enablePageStyling ? 'active' : ''}" data-setting="enablePageStyling">
+                    <div class="oauth-switch-knob"></div>
+                </div>
+            </div>
+
+            <!-- ✅ 新增：网站白名单限制（默认开启，依赖 settings.restrictByWebsite） -->
+            <div class="oauth-switch-item">
+                <div class="oauth-switch-info">
+                    <div class="oauth-switch-label">网站白名单限制</div>
+                    <div class="oauth-switch-desc">只对白名单网站自动授权（默认开启）。名单来源：GitHub远程 + 本地补充</div>
+                </div>
+                <div class="oauth-switch ${settings.restrictByWebsite ? 'active' : ''}" data-setting="restrictByWebsite">
+                    <div class="oauth-switch-knob"></div>
+                </div>
+            </div>
+
+            <!-- ✅ 新增：操作按钮行 -->
+            <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+                <button class="oauth-btn" id="refreshRemoteWhitelist">🔄 立即刷新远程白名单</button>
+                <button class="oauth-btn" id="addCurrentSiteToWhitelist">➕ 把当前网站加入本地白名单</button>
+            </div>
+        </div>
+    `;
         }
 
         generateAdvancedSettingsHTML() {
@@ -2010,9 +2155,36 @@
                 aboutScript: () => this.showAbout(),
                 toggleUITheme: () => this.toggleUITheme(),
                 toggleTheme: () => this.toggleTheme(),
-                viewAllHistory: () => this.showAllHistory()
+                viewAllHistory: () => this.showAllHistory(),
+
+                // ✅ 新增：立即刷新远程白名单（使用 Utils.loadRemoteWhitelist）
+                refreshRemoteWhitelist: async () => {
+                    try {
+                        const list = await Utils.loadRemoteWhitelist(this.storage, this.settings);
+                        this.showMessage(`✅ 远程白名单已刷新（${list.length} 条）`);
+                    } catch (e) {
+                        this.showMessage('❌ 刷新失败，请稍后重试', 'error');
+                    }
+                },
+
+                // ✅ 新增：把当前 connect 页面“网站:”加入本地白名单（使用 Utils.normalizeHost）
+                addCurrentSiteToWhitelist: () => {
+                    const pi = new PageInfo().get();
+                    const host = Utils.normalizeHost(pi.websiteUrl || pi.website);
+                    if (!host) return this.showMessage('未识别到当前网站', 'error');
+
+                    const wl = Array.isArray(this.settings.whitelist) ? this.settings.whitelist.slice() : [];
+                    if (wl.includes(host)) {
+                        return this.showMessage('已在本地白名单', 'warning');
+                    }
+                    wl.push(host);
+                    this.updateSetting('whitelist', wl);
+                    this.refreshUI();
+                    this.showMessage(`已加入本地白名单：${host}`);
+                }
             };
 
+            // 统一绑定每个按钮 id → handler
             Object.entries(buttons).forEach(([id, handler]) => {
                 const btn = this.ui.querySelector(`#${id}`);
                 if (btn) {
@@ -2020,7 +2192,7 @@
                 }
             });
 
-            // 导入文件事件
+            // 维持原有的“导入文件”监听
             const importFile = this.ui.querySelector('#importFile');
             if (importFile) {
                 importFile.addEventListener('change', (e) => {
@@ -2120,7 +2292,9 @@
                 enableDebugMode: '调试模式',
                 showChartStats: '图表统计',
                 showHourlyChart: '小时统计',
-                showWebsiteStats: '网站统计'
+                showWebsiteStats: '网站统计',
+                // ✅ 新增：用于右上角 Toast 提示
+                restrictByWebsite: '网站白名单限制'
             };
             return labels[key] || key;
         }
