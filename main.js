@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🏆 LINUX DO OAuth 极简助手 - 面板集成版 (无自动点击)
 // @namespace    https://github.com/TechnologyStar/linuxdo-oauth-helper
-// @version      3.0.2
+// @version      3.0.3
 // @description  🎯 专为LINUX DO OAuth设计的三主题UI助手 - 简约白/紫色渐变/彩虹华丽 + 条形图统计 (已移除自动点击功能)
 // @author       Premium UI Designer
 // @match        https://connect.linux.do/*
