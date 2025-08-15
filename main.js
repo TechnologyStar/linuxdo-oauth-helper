@@ -26,7 +26,7 @@
         defaultSettings: {
             // 核心功能
             // autoClickApprove: false, // ❌ 已移除：自动点击授权
-            saveLoginHistory: false,
+            saveLoginHistory: true,
             showNotifications: false,
             // 网站限制
             // restrictByWebsite: true,  // ❌ 已移除：默认开启限制：只对白名单网站自动授权
@@ -45,8 +45,8 @@
             enableAdvancedStats: false,
             enableDebugMode: false,
             showChartStats: true, // 显示图表统计
-            showHourlyChart: false, // 显示小时统计
-            showWebsiteStats: false, // 显示网站统计
+            showHourlyChart: true, // 显示小时统计
+            showWebsiteStats: true, // 显示网站统计
             // 时间设置
             // autoClickDelay: 10, // ❌ 已移除：自动点击延迟
             notificationDuration: 3000,
